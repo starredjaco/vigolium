@@ -40,8 +40,14 @@ func TestDefaultAgentConfig_Olium(t *testing.T) {
 	if cfg.Olium.ReasoningEffort != "medium" {
 		t.Errorf("expected agent.olium.reasoning_effort=medium, got %q", cfg.Olium.ReasoningEffort)
 	}
-	if cfg.Olium.Model != "gemma4:latest" {
-		t.Errorf("expected agent.olium.model=gemma4:latest, got %q", cfg.Olium.Model)
+	// Model defaults to empty so it doesn't shadow custom_provider.model_id:
+	// "" means "provider default", which for openai-compatible resolves to
+	// custom_provider.model_id (the actual gemma4:latest default lives there).
+	if cfg.Olium.Model != "" {
+		t.Errorf("expected agent.olium.model to default empty, got %q", cfg.Olium.Model)
+	}
+	if cfg.Olium.CustomProvider.ModelID != "gemma4:latest" {
+		t.Errorf("expected agent.olium.custom_provider.model_id=gemma4:latest, got %q", cfg.Olium.CustomProvider.ModelID)
 	}
 	if cfg.Olium.OAuthCredPath != "~/.codex/auth.json" {
 		t.Errorf("expected agent.olium.oauth_cred_path=~/.codex/auth.json, got %q", cfg.Olium.OAuthCredPath)

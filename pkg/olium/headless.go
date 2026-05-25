@@ -30,10 +30,16 @@ func RunHeadless(ctx context.Context, opts HeadlessOptions) error {
 	}
 
 	eng, provName, model, err := buildHeadlessEngine(opts.Options)
-	_ = provName
-	_ = model
 	if err != nil {
 		return err
+	}
+
+	// Under -v/--verbose (or --debug), print which provider+model is actually
+	// resolved before any output streams. Answers "what model are you running"
+	// deterministically — independent of whether the model itself answers it
+	// correctly — and orients the request/SSE dumps that --debug emits below.
+	if opts.Verbose {
+		fmt.Fprintf(os.Stderr, "[olium] provider=%s model=%s\n", provName, model)
 	}
 
 	ch := eng.Run(ctx, opts.Prompt)

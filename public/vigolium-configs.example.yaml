@@ -1157,8 +1157,10 @@ agent:
     # google-vertex → "gemini-2.5-pro"; openai-compatible → uses
     # `custom_provider.model_id` below.
     # Override per-run with --model.
-    # Default: gemma4:latest (matches custom_provider.model_id below)
-    model: gemma4:latest
+    # Default: "" (empty). Leave empty so the provider default applies — for
+    # openai-compatible that means custom_provider.model_id wins. Setting any
+    # value here overrides custom_provider.model_id for every provider.
+    model: ""
 
     # Path to OAuth/SA credential file. Supports ~ expansion.
     # openai-codex-oauth: ~/.codex/auth.json (produced by `codex login`)

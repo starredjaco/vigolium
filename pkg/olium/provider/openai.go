@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 
 	"github.com/vigolium/vigolium/pkg/olium/stream"
@@ -152,6 +153,13 @@ func (a *OpenAI) Stream(ctx context.Context, req Request) (<-chan stream.Event, 
 	if url == "" {
 		url = openAIChatCompletionsURL
 	}
+	// Provider tracing (--debug / VIGOLIUM_OLIUM_DEBUG): dump the outgoing
+	// request so operators can see the exact model + messages on the wire.
+	// The API key lives in the Authorization header (not the body), and
+	// debugFprintf scrubs any credential-shaped substrings regardless.
+	if DebugEnabled() {
+		debugFprintf(os.Stderr, "[%s-req] POST %s %s", a.Name(), url, string(payload))
+	}
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
 	if err != nil {
 		return nil, err
@@ -279,6 +287,12 @@ func (a *OpenAI) consumeSSE(ctx context.Context, body io.ReadCloser, out chan<- 
 		data := strings.TrimSpace(evt.Data)
 		if data == "" {
 			continue
+		}
+		// Provider tracing (--debug / VIGOLIUM_OLIUM_DEBUG): echo each raw SSE
+		// chunk, including the terminating [DONE], so stream-shape issues with
+		// arbitrary openai-compatible backends are diagnosable.
+		if DebugEnabled() {
+			debugFprintf(os.Stderr, "[%s-sse] %s", a.Name(), data)
 		}
 		if data == "[DONE]" {
 			state.flushFinal(out)

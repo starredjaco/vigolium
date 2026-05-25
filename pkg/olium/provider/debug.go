@@ -5,7 +5,30 @@ import (
 	"io"
 	"os"
 	"regexp"
+	"sync/atomic"
 )
+
+// debugFlag gates the provider-level request/SSE dumps shared by every backend
+// in this package. It is seeded from VIGOLIUM_OLIUM_DEBUG at startup and can be
+// flipped at runtime via SetDebug — the CLI wires the global --debug flag to it.
+//
+// A runtime setter is required because the env var is read at package-init time,
+// which happens before cobra parses flags; without it, `--debug` could never
+// take effect (only the env var would).
+var debugFlag atomic.Bool
+
+func init() {
+	if os.Getenv("VIGOLIUM_OLIUM_DEBUG") != "" {
+		debugFlag.Store(true)
+	}
+}
+
+// SetDebug toggles provider-level tracing (full request payload + raw SSE
+// events to stderr, with credentials scrubbed). Idempotent and concurrency-safe.
+func SetDebug(on bool) { debugFlag.Store(on) }
+
+// DebugEnabled reports whether provider tracing is on.
+func DebugEnabled() bool { return debugFlag.Load() }
 
 // secretPatterns matches the credential shapes most likely to leak through
 // a provider's debug dump — operator-gated by VIGOLIUM_OLIUM_DEBUG. The

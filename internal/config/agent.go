@@ -47,7 +47,7 @@ type AgentConfig struct {
 // making the available knobs discoverable.
 type OliumConfig struct {
 	Provider            string               `yaml:"provider"`              // openai-codex-oauth | openai-api-key | anthropic-api-key | anthropic-oauth | anthropic-cli | anthropic-vertex | google-vertex | openai-compatible
-	Model               string               `yaml:"model"`                 // default "gpt-5.5"; empty = provider default
+	Model               string               `yaml:"model"`                 // empty (default) = provider default; for openai-compatible this falls back to custom_provider.model_id
 	OAuthCredPath       string               `yaml:"oauth_cred_path"`       // OAuth/SA file path (openai-codex-oauth, anthropic-vertex, google-vertex); default ~/.codex/auth.json. For Vertex providers, falls back to $GOOGLE_APPLICATION_CREDENTIALS.
 	OAuthToken          string               `yaml:"oauth_token"`           // OAuth bearer token (anthropic-oauth); produced by `claude setup-token`. Supports ${ENV_VAR} expansion, falls back to $ANTHROPIC_API_KEY when empty
 	LLMAPIKey           string               `yaml:"llm_api_key"`           // API-key providers (anthropic-api-key, openai-api-key); supports ${ENV_VAR} expansion at load time, falls back to provider-specific env (ANTHROPIC_API_KEY / OPENAI_API_KEY)
@@ -398,8 +398,12 @@ func DefaultAgentConfig() *AgentConfig {
 // them without requiring any user-side yaml.
 func DefaultOliumConfig() OliumConfig {
 	return OliumConfig{
-		Provider:        "openai-compatible",
-		Model:           "gemma4:latest",
+		Provider: "openai-compatible",
+		// Model intentionally left empty: "" means "provider default", which
+		// for openai-compatible falls back to custom_provider.model_id (see
+		// resolveProvider in pkg/olium/runner.go). Shipping a non-empty default
+		// here would shadow custom_provider.model_id and silently override it.
+		Model:           "",
 		OAuthCredPath:   "~/.codex/auth.json",
 		ReasoningEffort: "medium",
 		MaxTokens:       1000000,

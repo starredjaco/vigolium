@@ -20,7 +20,6 @@ var (
 	oliumSystem        string
 	oliumPrompt        string
 	oliumStdin         bool
-	oliumVerbose       bool
 	oliumProvider      string
 	oliumLLMAPIKey     string
 	oliumClaudeBin     string
@@ -110,10 +109,14 @@ func runAgentOlium(cmd *cobra.Command, args []string) error {
 				return fmt.Errorf("olium: -p - requires a non-empty prompt on stdin")
 			}
 		}
+		// Verbose tool previews + a per-turn usage line follow the global
+		// -v/--verbose (or --debug). The olium command previously defined its
+		// own -v that shadowed the persistent flag, so `vigolium ol --verbose`
+		// silently did nothing for logging — now both flow from the same knob.
 		return olium.RunHeadless(context.Background(), olium.HeadlessOptions{
 			Options: opts,
 			Prompt:  prompt,
-			Verbose: oliumVerbose,
+			Verbose: globalVerbose || globalDebug,
 		})
 	}
 
@@ -151,7 +154,9 @@ func registerOliumFlags(cmd *cobra.Command) {
 	f.StringVar(&oliumSystem, "system", "", "Override system prompt")
 	f.StringVarP(&oliumPrompt, "prompt", "p", "", "Run one prompt non-interactively and stream to stdout (skips the TUI). Pass '-' to read the prompt from stdin")
 	f.BoolVar(&oliumStdin, "stdin", false, "Force reading prompt from stdin")
-	f.BoolVarP(&oliumVerbose, "verbose", "v", false, "In headless mode, surface a per-tool head/tail preview of each tool result alongside the standard one-liner")
+	// No local -v/--verbose here: it would shadow the persistent global
+	// --verbose (root.go). Headless verbosity flows from the global
+	// -v/--verbose (and --debug) via runAgentOlium instead.
 }
 
 func init() {

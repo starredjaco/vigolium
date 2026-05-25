@@ -16,17 +16,14 @@ import (
 	"github.com/vigolium/vigolium/pkg/olium/stream"
 )
 
-// codexDebug dumps every SSE event type to stderr when VIGOLIUM_OLIUM_DEBUG=1.
-// Kept as a quiet operator knob for tracking down stream-shape regressions.
-var codexDebug = os.Getenv("VIGOLIUM_OLIUM_DEBUG") != ""
-
-// debugToolArgErr surfaces a tool-call argument unmarshal failure under the
-// VIGOLIUM_OLIUM_DEBUG knob. A failure here is consequential: the tool is
-// invoked with empty arguments because the streamed JSON could not be
-// assembled. It is kept non-fatal (the call still proceeds) but observable.
-// Shared by the codex, anthropic, and openai stream parsers in this package.
+// debugToolArgErr surfaces a tool-call argument unmarshal failure when provider
+// tracing is on (DebugEnabled / VIGOLIUM_OLIUM_DEBUG / --debug). A failure here
+// is consequential: the tool is invoked with empty arguments because the
+// streamed JSON could not be assembled. It is kept non-fatal (the call still
+// proceeds) but observable. Shared by the codex, anthropic, and openai stream
+// parsers in this package.
 func debugToolArgErr(provider string, err error) {
-	if err != nil && codexDebug {
+	if err != nil && DebugEnabled() {
 		fmt.Fprintf(os.Stderr, "[olium %s] tool-call argument unmarshal failed: %v\n", provider, err)
 	}
 }
@@ -301,7 +298,7 @@ func (c *Codex) consumeSSE(ctx context.Context, body io.ReadCloser, out chan<- s
 			continue
 		}
 		t, _ := parsed["type"].(string)
-		if codexDebug {
+		if DebugEnabled() {
 			extra := ""
 			if item, ok := parsed["item"].(map[string]any); ok {
 				if itype, _ := item["type"].(string); itype != "" {

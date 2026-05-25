@@ -36,6 +36,14 @@ func LoadSkillsFor(includeUser bool) (*skill.Registry, []string) {
 // defaults override this in resolveProvider.
 const DefaultModel = "gpt-5.5"
 
+// SetDebug toggles provider-level tracing (full request payload + raw SSE
+// events to stderr, credentials scrubbed) for every olium backend. The CLI
+// wires the global --debug flag to this so the documented flag actually traces
+// the in-process agent — the engine itself emits no zap logs, so plain --debug
+// would otherwise show nothing for `vigolium ol`. Also honored via the
+// VIGOLIUM_OLIUM_DEBUG env var at startup.
+func SetDebug(on bool) { provider.SetDebug(on) }
+
 // DefaultSystemPrompt is the baseline prompt when the user doesn't supply one.
 const DefaultSystemPrompt = `You are olium, a security-focused coding agent running inside the vigolium scanner.
 You have access to tools: bash, read_file, write_file, edit_file, ls, grep, glob, web_fetch.

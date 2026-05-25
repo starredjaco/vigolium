@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/vigolium/vigolium/pkg/cli/internal/clicommon"
 	"github.com/vigolium/vigolium/pkg/modules"
+	"github.com/vigolium/vigolium/pkg/olium"
 	"github.com/vigolium/vigolium/pkg/terminal"
 	"go.uber.org/zap"
 )
@@ -122,6 +123,14 @@ Run 'vigolium <command> --help' for command-specific flags and examples, or 'vig
 		// Initialize logger for all commands
 		zapLogger := initLogger(globalVerbose, globalSilent, globalDebug, globalDumpTraffic, globalLogFile)
 		_ = zapLogger // logger is set globally via zap.ReplaceGlobals
+
+		// The olium agent runtime (providers/engine) doesn't log through zap,
+		// so --debug alone shows nothing for agent commands. Bridge it to the
+		// provider tracing knob so --debug dumps each provider request + SSE
+		// stream (credentials scrubbed), matching what the flag advertises.
+		if globalDebug || globalDumpTraffic {
+			olium.SetDebug(true)
+		}
 
 		// Default IS_SANDBOX=1 in vigolium's own env so every child process
 		// — the direct anthropic-cli provider, audit's internal claude call,

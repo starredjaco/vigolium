@@ -15,11 +15,6 @@ import (
 	"github.com/vigolium/vigolium/pkg/olium/stream"
 )
 
-// vertexDebug dumps Vertex request bodies + raw SSE event types to stderr
-// when VIGOLIUM_OLIUM_DEBUG=1. Useful for tracking down 4xx schema errors
-// (Gemini's functionDeclarations validator is the strictest of the three).
-var vertexDebug = os.Getenv("VIGOLIUM_OLIUM_DEBUG") != ""
-
 const (
 	// vertexAnthropicVersion is the magic body field every
 	// publishers/anthropic request must carry. Distinct from the
@@ -112,7 +107,7 @@ func (v *vertexTransport) streamAnthropic(ctx context.Context, providerName stri
 	if err != nil {
 		return nil, err
 	}
-	if vertexDebug {
+	if DebugEnabled() {
 		debugFprintf(os.Stderr, "[vertex-anthropic] %s", string(payload))
 	}
 
@@ -200,7 +195,7 @@ func (v *vertexTransport) streamGemini(ctx context.Context, providerName string,
 	if err != nil {
 		return nil, err
 	}
-	if vertexDebug {
+	if DebugEnabled() {
 		debugFprintf(os.Stderr, "[vertex-gemini] %s", string(payload))
 	}
 
@@ -431,7 +426,7 @@ func consumeGeminiSSE(ctx context.Context, body io.ReadCloser, out chan<- stream
 		if err := json.Unmarshal([]byte(evt.Data), &parsed); err != nil {
 			continue
 		}
-		if vertexDebug {
+		if DebugEnabled() {
 			debugFprintf(os.Stderr, "[vertex-gemini-sse] %s", evt.Data)
 		}
 		state.handle(parsed, out)
