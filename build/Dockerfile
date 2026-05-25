@@ -9,11 +9,24 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
+# Force HTTP/1.1 and enable curl retries via ~/.curlrc, which every curl in
+# this stage (including the bun installer's own download) inherits. Under
+# multi-arch buildx the emulated (QEMU) leg fetches release zips from GitHub
+# over a slow/contended link where HTTP/2 stream resets ("stream was not closed
+# cleanly") are common — these settings ride them out.
+RUN printf '%s\n' '--http1.1' '--retry 5' '--retry-delay 3' '--retry-all-errors' > /root/.curlrc
+
 # bun is required by `make build`: it compiles the embedded archon binary
 # (platform/archon-audit → pkg/archon/archonbin/_bin/) and the jsscan binaries
-# (platform/jsscan → internal/resources/deparos/jsscan/).
-RUN curl -fsSL https://bun.sh/install | bash
+# (platform/jsscan → internal/resources/deparos/jsscan/). Retry the whole
+# install a few times since the bun script's own download can still fail.
+RUN for attempt in 1 2 3 4 5; do \
+        curl -fsSL https://bun.sh/install | bash && break; \
+        echo "bun install attempt $attempt failed; retrying in 5s..." >&2; \
+        sleep 5; \
+    done
 ENV PATH="/root/.bun/bin:${PATH}"
+RUN bun --version
 
 # Build a fully static binary so it has no host glibc dependencies. The bun
 # driver/sqliteshim falls back to pure-go modernc.org/sqlite when CGO=0.
@@ -57,6 +70,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Chromium headless environment
 ENV CHROME_NO_SANDBOX=true
 ENV CHROMIUM_FLAGS="--no-sandbox --disable-dev-shm-usage"
+
+# Same curl hardening as the builder stage: the runtime stage downloads codeql,
+# nuclei-templates, chrome-for-testing, etc., all of which hit the same flaky
+# HTTP/2 streams on the emulated multi-arch leg.
+RUN printf '%s\n' '--http1.1' '--retry 5' '--retry-delay 3' '--retry-all-errors' > /root/.curlrc
 
 # Install semgrep + codeql (multi-arch via uname -m inside the script).
 COPY build/scripts/install-deps.sh /tmp/install-deps.sh

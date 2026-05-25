@@ -22,6 +22,11 @@ test/testdata/
 bin/
 build/dist/
 build/dist-public/
+# Stray dev binary at the repo root (~280MB) — built by `go build`/IDE runs,
+# never needed in the image (the Dockerfile compiles its own). Anchored to root
+# so it can't match cmd/vigolium or other paths.
+/vigolium
+/vigolium-prod
 
 # Editor / OS noise
 .vscode/

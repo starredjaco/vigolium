@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/uptrace/bun"
 
 	"github.com/vigolium/vigolium/internal/config"
 	"github.com/vigolium/vigolium/pkg/agent"
@@ -40,7 +41,12 @@ Use --format with -o/--output to write a report in the same step, e.g.
 'vigolium import ./audit --format html -o audit-report.html'. This replaces
 the import-then-export two-step: when the import created an audit the
 report is scoped to that audit's findings. Formats mirror 'vigolium export':
-html, report, pdf, markdown (alias md).`,
+html, report, pdf, markdown (alias md).
+
+Report customization flags (--report-title, --report-target, --report-duration,
+--report-generated-at, --report-url) and finding filters (--severity, --search)
+mirror 'vigolium export', so a single import step can emit a fully-branded report:
+'vigolium import ./audit --format html -o audit-report.html --report-title "My custom report"'.`,
 	Args: cobra.ExactArgs(1),
 	RunE: runImport,
 }
@@ -50,7 +56,29 @@ func init() {
 	importCmd.Flags().String("upload-key", "", "Explicit storage key for --upload (default: imports/<basename>-<ts>.<ext>)")
 	importCmd.Flags().String("format", "", "Also write a report after import: html, report, pdf, or markdown (md). Mirrors `vigolium export --format`.")
 	importCmd.Flags().StringP("output", "o", "", "Report output path or gs://<project>/<key> URL (required when --format is set; supports {ts})")
+	// Report customization + finding filters — mirror `vigolium export` so a
+	// single import step can emit a fully-branded, filtered report.
+	importCmd.Flags().String("report-title", "", "Custom title for the HTML report (default: \"Vigolium Static Report\")")
+	importCmd.Flags().String("report-target", "", "Target name for the report (e.g. repository name or URL)")
+	importCmd.Flags().String("report-duration", "", "Human-readable scan duration for the report (e.g. \"10h42m5s\")")
+	importCmd.Flags().String("report-generated-at", "", "ISO timestamp for report generation (e.g. \"2026-04-18T03:00:00Z\")")
+	importCmd.Flags().String("report-url", "", "URL for the \"Raw Report URL\" button in HTML reports (overrides VIGOLIUM_REPORT_SHARED_URL)")
+	importCmd.Flags().String("severity", "", "Filter report findings by severity (comma-separated: critical,high,medium,low,info)")
+	importCmd.Flags().String("search", "", "Fuzzy search filter across finding fields included in the report")
 	rootCmd.AddCommand(importCmd)
+}
+
+// importReportOpts carries the report-customization and finding-filter flag
+// overrides from `vigolium import` into emitImportReport. Empty fields fall
+// back to the auto-detected scan metadata / defaults, matching `vigolium export`.
+type importReportOpts struct {
+	title       string
+	target      string
+	duration    string
+	generatedAt string
+	reportURL   string
+	severity    string
+	search      string
 }
 
 func runImport(cmd *cobra.Command, args []string) error {
@@ -93,6 +121,17 @@ func runImport(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to connect to database: %w", err)
 	}
+	// Ensure the schema exists before any DB work. `import` is often the first
+	// command run against a brand-new database (e.g. a fresh --db path), and
+	// unlike scan/ingest/agent it otherwise never initializes the schema — which
+	// silently drops the imported findings and fails any post-import report with
+	// "no such table: findings".
+	if err := db.CreateSchema(ctx); err != nil {
+		return fmt.Errorf("failed to create database schema: %w", err)
+	}
+	if err := db.SeedDefaults(ctx); err != nil {
+		return fmt.Errorf("failed to seed default data: %w", err)
+	}
 	projectUUID, err := resolveProjectUUID()
 	if err != nil {
 		return err
@@ -122,7 +161,23 @@ func runImport(cmd *cobra.Command, args []string) error {
 	printImportResult(localPath, result)
 
 	if reportFormat != "" {
-		if err := emitImportReport(ctx, db, result, reportFormat, reportOutput); err != nil {
+		reportTitle, _ := cmd.Flags().GetString("report-title")
+		reportTarget, _ := cmd.Flags().GetString("report-target")
+		reportDuration, _ := cmd.Flags().GetString("report-duration")
+		reportGeneratedAt, _ := cmd.Flags().GetString("report-generated-at")
+		reportURL, _ := cmd.Flags().GetString("report-url")
+		reportSeverity, _ := cmd.Flags().GetString("severity")
+		reportSearch, _ := cmd.Flags().GetString("search")
+		opts := importReportOpts{
+			title:       reportTitle,
+			target:      reportTarget,
+			duration:    reportDuration,
+			generatedAt: reportGeneratedAt,
+			reportURL:   reportURL,
+			severity:    reportSeverity,
+			search:      reportSearch,
+		}
+		if err := emitImportReport(ctx, db, result, reportFormat, reportOutput, opts); err != nil {
 			return fmt.Errorf("import succeeded but report generation failed: %w", err)
 		}
 	}
@@ -251,7 +306,7 @@ func printImportResult(localPath string, r *dbimport.Result) {
 // scoped to that audit's findings; otherwise it falls back to all findings in
 // the project DB. This collapses the historical import-then-export two-step
 // into one command.
-func emitImportReport(ctx context.Context, db *database.DB, result *dbimport.Result, format, outputArg string) error {
+func emitImportReport(ctx context.Context, db *database.DB, result *dbimport.Result, format, outputArg string, opts importReportOpts) error {
 	gen, defaultTitle, ok := reportGenerator(format)
 	if !ok {
 		return fmt.Errorf("unsupported report format %q", format)
@@ -268,6 +323,16 @@ func emitImportReport(ctx context.Context, db *database.DB, result *dbimport.Res
 	if scanUUID != "" {
 		q = q.Where("agentic_scan_uuid = ?", scanUUID)
 	}
+	// Finding filters mirror `vigolium export`'s findings query so the report
+	// contents stay consistent between the two commands.
+	if opts.search != "" {
+		p := "%" + opts.search + "%"
+		q = q.Where("(module_id LIKE ? OR module_name LIKE ? OR description LIKE ? OR matched_at LIKE ? OR severity LIKE ? OR url LIKE ? OR hostname LIKE ? OR extracted_results LIKE ?)", p, p, p, p, p, p, p, p)
+	}
+	if opts.severity != "" {
+		sevs := strings.Split(strings.ToLower(opts.severity), ",")
+		q = q.Where("LOWER(severity) IN (?)", bun.List(sevs))
+	}
 	if err := q.Scan(ctx); err != nil {
 		return fmt.Errorf("query findings for report: %w", err)
 	}
@@ -276,9 +341,15 @@ func emitImportReport(ctx context.Context, db *database.DB, result *dbimport.Res
 		items = append(items, exportEnvelope{Type: "finding", Data: f})
 	}
 
+	title := defaultTitle
+	if opts.title != "" {
+		title = opts.title
+	}
 	meta := output.HTMLReportMeta{
-		Title:   defaultTitle,
-		Version: getVersion(),
+		Title:           title,
+		Version:         getVersion(),
+		GeneratedAt:     opts.generatedAt,
+		ReportSharedURL: opts.reportURL,
 	}
 	if s := result.AgenticScan; s != nil {
 		meta.ScanTarget = s.TargetURL
@@ -288,6 +359,14 @@ func emitImportReport(ctx context.Context, db *database.DB, result *dbimport.Res
 		if s.DurationMs > 0 {
 			meta.ScanDuration = (time.Duration(s.DurationMs) * time.Millisecond).Round(time.Second).String()
 		}
+	}
+	// Explicit flag overrides win over the auto-detected scan metadata, matching
+	// how `vigolium export` lets --report-target/--report-duration override.
+	if opts.target != "" {
+		meta.ScanTarget = opts.target
+	}
+	if opts.duration != "" {
+		meta.ScanDuration = opts.duration
 	}
 
 	if !globalJSON {

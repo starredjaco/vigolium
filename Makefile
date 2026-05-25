@@ -1,4 +1,4 @@
-.PHONY: build build-embedded build-all snapshot release public public-release prepare-public-scripts clean test test-unit test-integration test-e2e test-e2e-api test-e2e-agent test-e2e-postgres test-canary sanity-check smoke-autopilot-auth test-e2e-vampi test-e2e-dvwa test-e2e-juiceshop test-e2e-browser-fallback test-e2e-piolium test-benchmark test-benchmark-whitebox test-benchmark-blackbox test-benchmark-all test-benchmark-crapi test-benchmark-vuln-java test-benchmark-vuln-nginx test-benchmark-coverage test-agent-benchmark test-agent-parsing test-agent-quality test-agent-handoff test-agent-benchmark-e2e benchmark-agent-generate test-coverage coverage-gate coverage-combined test-coverage-check test-race test-ci test-xbow test-xbow-ssti test-xbow-xss test-xbow-sqli test-xbow-lfi test-xbow-cmdi test-xbow-ssrf test-xbow-xxe xbow-build lint verify-generated fmt tidy deps deps-chrome deps-chrome-update install install-gotestsum swagger help postgres-up postgres-down postgres-logs postgres-status crapi-up crapi-down crapi-logs crapi-status juiceshop-up juiceshop-down juiceshop-logs juiceshop-status vampi-up vampi-down vampi-logs vampi-status vulnerable-java-up vulnerable-java-down vulnerable-java-logs vulnerable-java-status vulnerable-nginx-up vulnerable-nginx-down vulnerable-nginx-logs vulnerable-nginx-status apps-up apps-down docker docker-build docker-build-prod docker-run docker-push docker-publish update-jsscan ensure-jsscan sync-audit update-audit ensure-audit build-audit update-ui ssh-testbed-keygen ssh-testbed-up ssh-testbed-down ssh-testbed-status ssh-testbed-logs generate-metadata prepare-release-scripts cdn-sync bump-version npm-build npm-pack npm-publish
+.PHONY: build build-embedded build-all snapshot release public public-release prepare-public-scripts clean test test-unit test-integration test-e2e test-e2e-api test-e2e-agent test-e2e-postgres test-canary sanity-check smoke-autopilot-auth test-e2e-vampi test-e2e-dvwa test-e2e-juiceshop test-e2e-browser-fallback test-e2e-piolium test-benchmark test-benchmark-whitebox test-benchmark-blackbox test-benchmark-all test-benchmark-crapi test-benchmark-vuln-java test-benchmark-vuln-nginx test-benchmark-coverage test-agent-benchmark test-agent-parsing test-agent-quality test-agent-handoff test-agent-benchmark-e2e benchmark-agent-generate test-coverage coverage-gate coverage-combined test-coverage-check test-race test-ci test-xbow test-xbow-ssti test-xbow-xss test-xbow-sqli test-xbow-lfi test-xbow-cmdi test-xbow-ssrf test-xbow-xxe xbow-build lint verify-generated fmt tidy deps deps-chrome deps-chrome-update install install-gotestsum swagger help postgres-up postgres-down postgres-logs postgres-status crapi-up crapi-down crapi-logs crapi-status juiceshop-up juiceshop-down juiceshop-logs juiceshop-status vampi-up vampi-down vampi-logs vampi-status vulnerable-java-up vulnerable-java-down vulnerable-java-logs vulnerable-java-status vulnerable-nginx-up vulnerable-nginx-down vulnerable-nginx-logs vulnerable-nginx-status apps-up apps-down docker docker-build docker-build-prod docker-run docker-push docker-buildx-setup docker-publish update-jsscan ensure-jsscan sync-audit update-audit ensure-audit build-audit update-ui ssh-testbed-keygen ssh-testbed-up ssh-testbed-down ssh-testbed-status ssh-testbed-logs generate-metadata prepare-release-scripts cdn-sync bump-version npm-build npm-pack npm-publish
 
 # Go parameters
 GOCMD=go
@@ -735,6 +735,10 @@ DOCKER_PROD_IMAGE=vigolium-prod
 DOCKER_TAG?=$(VERSION)
 DOCKER_REGISTRY?=
 DOCKER_HUB_IMAGE?=j3ssie/vigolium
+# Target platforms for the multi-arch publish. Override to build a subset,
+# e.g. DOCKER_PLATFORMS=linux/amd64.
+DOCKER_PLATFORMS?=linux/amd64,linux/arm64
+DOCKER_BUILDX_BUILDER?=vigolium-builder
 
 # Build Docker image
 docker: docker-build
@@ -781,16 +785,39 @@ docker-push:
 	docker push $(DOCKER_REGISTRY)/$(DOCKER_IMAGE):latest
 	@echo "$(PREFIX) Pushed $(DOCKER_REGISTRY)/$(DOCKER_IMAGE):$(DOCKER_TAG)"
 
-# Build the Docker image and publish it to Docker Hub as j3ssie/vigolium
-# (override the repo with DOCKER_HUB_IMAGE=). Pushes both the version tag
-# and :latest. Requires `docker login` to have been run beforehand.
-docker-publish: docker-build
-	@echo "$(PREFIX) Tagging and publishing to Docker Hub: $(DOCKER_HUB_IMAGE)..."
-	docker tag $(DOCKER_IMAGE):$(DOCKER_TAG) $(DOCKER_HUB_IMAGE):$(DOCKER_TAG)
-	docker tag $(DOCKER_IMAGE):latest $(DOCKER_HUB_IMAGE):latest
-	docker push $(DOCKER_HUB_IMAGE):$(DOCKER_TAG)
-	docker push $(DOCKER_HUB_IMAGE):latest
-	@echo "$(PREFIX) Published $(DOCKER_HUB_IMAGE):$(DOCKER_TAG) and $(DOCKER_HUB_IMAGE):latest"
+# Ensure a buildx builder backed by the docker-container driver exists and is
+# bootstrapped. The default `docker` driver only builds for the host platform
+# and cannot emit multi-arch manifests, so multi-platform publishing needs a
+# dedicated builder. Idempotent: reuses the builder if it already exists.
+docker-buildx-setup:
+	@if ! docker buildx inspect $(DOCKER_BUILDX_BUILDER) >/dev/null 2>&1; then \
+		echo "$(PREFIX) Creating buildx builder $(DOCKER_BUILDX_BUILDER)..."; \
+		docker buildx create --name $(DOCKER_BUILDX_BUILDER) --driver docker-container --use >/dev/null; \
+	else \
+		docker buildx use $(DOCKER_BUILDX_BUILDER) >/dev/null; \
+	fi
+	@docker buildx inspect --bootstrap $(DOCKER_BUILDX_BUILDER) >/dev/null
+
+# Build the Docker image for every platform in DOCKER_PLATFORMS (linux/amd64 +
+# linux/arm64 by default) and publish the multi-arch manifest to Docker Hub as
+# j3ssie/vigolium (override the repo with DOCKER_HUB_IMAGE=). Pushes both the
+# version tag and :latest in a single buildx run — multi-platform images can't
+# be loaded into the local image store, so build and push happen together.
+# Requires `docker login` beforehand, and QEMU/binfmt for emulating the
+# non-host architecture (bundled with Docker Desktop; on plain Linux run
+# `docker run --privileged --rm tonistiigi/binfmt --install all` once).
+docker-publish: docker-buildx-setup
+	@echo "$(PREFIX) Building and publishing multi-arch image to Docker Hub: $(DOCKER_HUB_IMAGE) ($(DOCKER_PLATFORMS))..."
+	docker buildx build \
+		--platform $(DOCKER_PLATFORMS) \
+		--build-arg VERSION=$(VERSION) \
+		--build-arg COMMIT_HASH=$(COMMIT_HASH) \
+		--build-arg BUILD_TIME=$(BUILD_TIME) \
+		-t $(DOCKER_HUB_IMAGE):$(DOCKER_TAG) \
+		-t $(DOCKER_HUB_IMAGE):latest \
+		-f build/Dockerfile \
+		--push .
+	@echo "$(PREFIX) Published $(DOCKER_HUB_IMAGE):$(DOCKER_TAG) and $(DOCKER_HUB_IMAGE):latest for $(DOCKER_PLATFORMS)"
 
 # GoReleaser snapshot (local build without publishing)
 GORELEASER_VERSION=$(patsubst v%,%,$(VERSION))
@@ -1180,7 +1207,7 @@ help:
 	@echo "    make docker-build-prod  Build production image (vigolium-prod, from Dockerfile.prod)"
 	@echo "    make docker-run       Build prod image and drop into an interactive bash shell"
 	@echo "    make docker-push      Push to registry (set DOCKER_REGISTRY=ghcr.io/user)"
-	@echo "    make docker-publish   Build and publish to Docker Hub ($(DOCKER_HUB_IMAGE))"
+	@echo "    make docker-publish   Build + publish multi-arch ($(DOCKER_PLATFORMS)) to Docker Hub ($(DOCKER_HUB_IMAGE))"
 	@echo ""
 	@echo "\033[33m  RELEASE\033[0m"
 	@echo "    make snapshot         Build local snapshot release (no publish)"

@@ -27,7 +27,19 @@ install_semgrep() {
         return
     fi
     log "installing semgrep via pip"
-    pip install --break-system-packages --no-cache-dir semgrep
+    # Retry: under emulated multi-arch Docker builds the ~78MB semgrep wheel
+    # frequently truncates mid-download over the slow/contended link, surfacing
+    # as a pip hash mismatch. Re-download (no cache) until it lands intact.
+    local attempt
+    for attempt in 1 2 3 4 5; do
+        if pip install --break-system-packages --no-cache-dir \
+                --retries 10 --timeout 120 semgrep; then
+            break
+        fi
+        log "semgrep install attempt ${attempt} failed; retrying in 5s..."
+        sleep 5
+    done
+    command -v semgrep >/dev/null 2>&1 || fail "semgrep install failed after 5 attempts"
     log "semgrep installed: $(semgrep --version 2>/dev/null || echo unknown)"
 }
 
